@@ -10,6 +10,7 @@ TARGETS = [
     ("usr/lib", "*.ko*"),       # Kernel-Module
     ("etc", "*"),
     ("boot", "*"),
+    ("home/agent/sentinel/sentinel", "*.py"),   # Sentinel selbst (Dev-Installation): manipulierter Waechter faellt auf
 ]
 
 # Dateien, die sich im Normalbetrieb legitim aendern

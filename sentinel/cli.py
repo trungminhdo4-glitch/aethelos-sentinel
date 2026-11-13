@@ -12,7 +12,7 @@ from sentinel.scan import scan, suid_scan
 from sentinel.store import Store, dumps
 
 EXIT_INTERNAL = 2
-TODO = ("tui", "export")
+TODO = ("tui",)
 FILE_CHECKS = ("integrity", "accounts")
 ALL_CHECKS = FILE_CHECKS + ("services", "network", "logs", "resources", "boot")
 PRIORITY = {0: 6, 10: 5, 11: 4}     # info / notice / warning -- nie 'err', sonst meldet der logs-Check Sentinel selbst
@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"sentinel {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
     for c, h in (("baseline", "Soll-Zustand aufnehmen"), ("check", "gegen Baseline pruefen"),
-                 ("report", "letzten Lauf anzeigen"), ("tui", "Dashboard (M4)"), ("export", "Baseline exportieren (M3)")):
+                 ("report", "letzten Lauf anzeigen"), ("tui", "Dashboard (M4)"), ("export", "Baseline als JSON fuer den Host (sentinel-host pin/verify)")):
         s = sub.add_parser(c, help=h)
         s.add_argument("--root", default="/", help="Wurzel des zu pruefenden Systems (Tests)")
         s.add_argument("--db", default=config.DEFAULT_DB)
@@ -139,6 +139,18 @@ def _journal(findings, rc, names) -> None:
                   "SENTINEL_CHECKS": ",".join(names)})
 
 
+def cmd_export(a) -> int:
+    from sentinel import host
+    try:
+        b = Store(a.db).load_baseline()
+    except ValueError as e:
+        return fail(str(e))
+    if b is None:
+        return fail(f"keine Baseline in {a.db} (zuerst: sudo sentinel baseline)")
+    print(dumps(host.to_export(*b)))
+    return 0
+
+
 def cmd_report(a) -> int:
     run, fs = Store(a.db).last_run()
     if run is None:
@@ -161,5 +173,5 @@ def _print_table(fs: list[dict], rc: int) -> None:
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     if a.command in TODO:
-        return fail(f"{a.command}: noch nicht implementiert (Meilenstein M3/M4)")
-    return {"baseline": cmd_baseline, "check": cmd_check, "report": cmd_report}[a.command](a)
+        return fail(f"{a.command}: noch nicht implementiert (Meilenstein M4)")
+    return {"baseline": cmd_baseline, "check": cmd_check, "report": cmd_report, "export": cmd_export}[a.command](a)

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Host-Werkzeug (WSL, als root): pin | verify | offline. Der Code kommt aus der Host-Kopie (/opt/sentinel-host),
+# nie live aus der VM. -I: keine fremden Pfade/PYTHONPATH.
+D=$(dirname "$(readlink -f "$0")")/..
+exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from sentinel.host import main; sys.exit(main(sys.argv[2:]))' "$D" "$@"
