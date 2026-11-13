@@ -1,71 +1,115 @@
 # Sentinel
 
-Integritäts- und Diagnose-Wächter für **Aethelos**, ein selbst gebautes Linux auf Basis von LFS 13.1-systemd.
-Entsteht und läuft komplett in der LFS-VM. Nur Python-3.14-Standardbibliothek, keine Fremdpakete.
+**Integritäts- und Diagnose-Wächter für ein selbst gebautes Linux.** Sentinel läuft auf *Aethelos*, einem System, das
+von Grund auf nach [Linux From Scratch 13.1 (systemd)](https://www.linuxfromscratch.org/lfs/view/13.1-systemd/) gebaut wurde:
+Toolchain, Kernel 7.1.8, systemd 261, dazu BLFS (OpenSSH, curl, git, sudo). Es läuft als QEMU/KVM-VM in WSL2.
+Sentinel ist komplett in dieser VM entstanden, nur mit der Python-3.14-Standardbibliothek und ohne Fremdpakete.
 
-Plan, Architektur und Meilensteine: siehe `SENTINEL-PLAN.md` im Host-Projekt (`Dev/sandbox/lfs/`).
+Was es kann:
+- Es merkt, wenn sich Programme, Bibliotheken, Kernel-Module, `/etc` oder `/boot` ändern, über SHA-256, Rechte und Besitzer, und wenn neue SUID-Dateien oder UID-0-Konten auftauchen.
+- Es überwacht Dienste, Netz, Journal, Ressourcen und den Boot.
+- Es zeigt alles live in einem Terminal-Dashboard. Nach einer Manipulation ist die Kachel nach **etwa 4 s rot**.
+- Es hat einen **Vertrauensanker außerhalb der VM**. Der fällt auch dann nicht herein, wenn ein Angreifer mit root-Rechten die Baseline fälscht.
+- Es testet sich selbst mit **reproduzierbaren Fehler-Injektionen**, von Unit-Tests bis zum Ende-zu-Ende-Lauf in einer Wegwerf-VM.
 
-## Stand: M4 (v0.4.0)
+## Architektur
+
+```mermaid
+flowchart LR
+  subgraph VM["LFS-VM (Aethelos)"]
+    direction TB
+    FS[("/usr /etc /boot<br/>Sentinel-Code")] -->|inotify| W[sentinel-watch]
+    SD[systemd / journal / Netz] -->|alle 15 s| W
+    B[sentinel-boot.service] --> C
+    T[sentinel.timer] --> C
+    W --> C[sentinel check<br/>7 Checks]
+    C --> DB[(sqlite<br/>Baseline + Läufe)]
+    C --> J[[Journal<br/>SENTINEL_*]]
+    DB --> TUI[sentinel tui]
+    F[sentinel-fault<br/>F1–F8 + undo] -.->|Test/Demo| FS
+  end
+  subgraph HOST["Host (WSL, außerhalb der VM)"]
+    P[sentinel-host pin/verify] -->|ssh: sentinel export| DB
+    O[sentinel-host offline] -->|Image read-only| FS
+    E[sentinel-e2e] -->|bootet Wegwerf-Kopie| VM
+    TR[(/srv/lfs/trust<br/>gepinnter Stand)]
+    P --- TR
+    O --- TR
+  end
+```
+
 | Check | prüft | Befund |
 |---|---|---|
-| `integrity` | SHA-256, Rechte, Besitzer von `/usr/bin`, `/usr/sbin`, `/usr/lib/*.so*`, `*.ko*`, `/etc`, `/boot`; neue SUID-Dateien | CRIT/WARN |
+| `integrity` | SHA-256, Rechte, Besitzer: `/usr/bin`, `/usr/sbin`, `/usr/lib/*.so*`, `*.ko*`, `/etc`, `/boot`, Sentinels eigener Code; neue SUID-Dateien im ganzen System | CRIT / WARN |
 | `accounts` | zusätzliche UID-0-Konten, leere Passwortfelder | CRIT |
-| `services` | fehlgeschlagene Units, Pflicht-Dienste (sshd, networkd, resolved, journald), mit letzter Journal-Zeile | WARN |
-| `network` | Link, IPv4-Adresse, DNS (3 Versuche); HTTPS optional (`config.HTTPS_URL`, aus) | WARN |
-| `logs` | neue Journal-Meldungen `err` und schlimmer seit dem letzten Lauf (Cursor), je Absender | WARN |
+| `services` | fehlgeschlagene Units, Pflicht-Dienste (sshd, networkd, resolved, journald), dazu die letzte systemd-Meldung zur Unit | WARN |
+| `network` | Link, IPv4-Adresse (ioctl, kein iproute2 nötig), DNS mit Zeitlimit; HTTPS optional | WARN |
+| `logs` | neue Journal-Meldungen `err` und schlimmer seit dem letzten Lauf (Cursor), je Absender zusammengefasst | WARN |
 | `resources` | Platte und Inodes ≥ 90 %, RAM < 10 % frei, Load > 2 × CPUs | WARN |
-| `boot` | Kernel-taint, Boot-Dauer > 60 s | WARN |
+| `boot` | Kernel-taint, Boot-Dauer | WARN |
 
-Mit `--root /` (Standard) laufen alle Checks, mit einem anderen `--root` nur die Datei-Checks. Auswahl: `--checks a,b`.
+Exit-Codes: `0` ok, `10` Warnung, `11` kritisch, `2` Sentinel konnte nicht prüfen. Das ist **fail-closed**: Was Sentinel nicht prüfen kann, meldet es nie als grün.
 
-Befehle (als root): `sentinel baseline | check | report [--json]`, `sentinel-fault list|inject|undo|status <F1..F8>`, `sentinel-selftest [F..]`.
-Jeder `check` schreibt eine Zusammenfassung ins Journal (`SYSLOG_IDENTIFIER=sentinel`, Felder `SENTINEL_EXIT`, `SENTINEL_CRIT`, `SENTINEL_WARN` ...):
-`journalctl -t sentinel` bzw. `journalctl SENTINEL_EXIT=11`.
+## Bedienung
 
-## Dashboard, Watch und Demo (M4)
-- `sudo sentinel tui`: curses-Dashboard mit einer Kachel je Check (grün/gelb/rot) und der Befundliste darunter, „seit“ zeigt das erste Auftreten. Es liest nur die Datenbank, `q` beendet. `--once` gibt den Inhalt als Text aus.
-- `sentinel-watch.service` (`sentinel watch`): inotify (per ctypes) auf alle Integritäts-Pfade, rund 1200 Verzeichnisse. Nach einer relevanten Änderung und 2 s Ruhe läuft ein voller Check, die Live-Checks alle 15 s.
-- `sudo sentinel-demo`: spielt die Demo mit Stoppuhr durch: `ls` manipulieren, rot, undo, grün, dann sshd stoppen. Exit 0, wenn alle Schritte in der Zeit sind.
+In der VM, als root:
+```
+sentinel baseline            # Soll-Zustand aufnehmen
+sentinel check [--json]      # alle Checks (Live-Checks nur für --root /), --checks a,b für eine Auswahl
+sentinel report [--json]     # letzter Lauf
+sentinel tui                 # Dashboard (q beendet), --once als Text
+sentinel export              # Baseline als JSON für den Host
+sentinel-fault list|inject|undo|status F1..F8
+sentinel-selftest [--json]   # alle Fehler injizieren, erkennen, zurücksetzen
+sentinel-demo                # Demo-Ablauf mit Stoppuhr (sentinel-watch muss laufen)
+```
+Installation: `sh systemd/install.sh` installiert die Wrapper sowie die Units `sentinel-boot`, `sentinel.timer` und
+`sentinel-watch`. Danach `sentinel baseline && systemctl start sentinel-watch`. Jeder Check schreibt eine Zusammenfassung ins
+Journal: `journalctl -t sentinel` oder `journalctl SENTINEL_EXIT=11`.
 
-**Demo von Hand** (zwei Terminals, VM mit Baseline und laufendem `sentinel-watch`):
-1. Terminal 1, die VM-Konsole (`lfs-vm`, root-Autologin): `sentinel tui`
-2. Terminal 2 (WSL): `lfs-ssh -n 'sudo sentinel-fault inject F1'`. Die Kachel `integrity` wird nach etwa 4 s rot.
-3. `lfs-ssh -n 'sudo sentinel report'` zeigt Datei, alten und neuen SHA-256 und den Zeitpunkt. Danach `… sentinel-fault undo F1`, die Kachel wird grün.
-4. `… sentinel-fault inject F4` (sshd stoppen, die SSH-Sitzung bleibt offen). `services` wird gelb und zeigt „Stopped OpenSSH Daemon.“. Danach `undo F4`.
-5. Zum Schluss auf dem Host: `sentinel-e2e`, die Tabelle mit 14 Zeilen.
+Auf dem Host (WSL, als root): `sentinel-host pin | verify | offline`, `sentinel-e2e`. Installiert wird das aus einem
+Git-Bundle mit `sh host/install-host.sh <bundle>`.
 
-## Host als Vertrauensanker (M3)
-Wer in der VM root ist, kann eine Datei ändern **und** die Baseline neu schreiben. Dann ist `sentinel check` in der VM grün.
-Deshalb gibt es eine zweite Seite außerhalb der VM, in WSL, als root:
+## Fehler-Katalog und Belege
 
-| Befehl | was |
-|---|---|
-| `sentinel-host pin` | holt `sudo sentinel export` per `lfs-ssh`, rechnet den Digest selbst nach und legt den Stand in `/srv/lfs/trust/` ab |
-| `sentinel-host verify` | vergleicht die aktuelle Baseline der VM mit dem gepinnten Stand. Weicht sie ab: exit 11 mit Liste der Pfade |
-| `sentinel-host offline` | VM aus: hängt das Platten-Image read-only ein und scannt es mit dem **Host-Code**. Sentinel in der VM wird dafür gar nicht gebraucht |
-| `sentinel-e2e` | bootet eine Wegwerf-Kopie der Platte und prüft F1–F8 sowie F9 (root ändert `/usr/bin/ls` und schreibt die Baseline neu) |
+| ID | Fehler | erkannt durch |
+|---|---|---|
+| F1 | Bytes an `/usr/bin/ls` anhängen | integrity, CRIT |
+| F2 | neue SUID-Datei in `/usr/local/bin` | integrity, CRIT |
+| F3 | zusätzliches UID-0-Konto | accounts, CRIT |
+| F4 | `sshd` stoppen | services, WARN, mit „Stopped OpenSSH Daemon.“ |
+| F5 | Link-DNS auf `127.0.0.1` | network, WARN |
+| F6 | Platte über 93 % (fallocate) | resources, WARN |
+| F7 | `logger -p err` | logs, WARN |
+| F8 | Bytes an `/boot/vmlinuz-*` anhängen | integrity, CRIT |
+| F9 | **root-Angreifer:** `ls` ändern **und** Baseline neu schreiben | VM: **blind** (bewusst getestet) · Host `verify`: CRIT · Host `offline`: CRIT |
 
-Installation der Host-Seite aus einem Bundle: `sh host/install-host.sh <bundle>` legt den Code nach `/opt/sentinel-host`.
-Ehrliche Grenze: Das Bundle kommt einmal aus der VM („trust on first use“). Danach lädt der Host nichts mehr aus der VM nach.
-Sentinel überwacht außerdem seinen eigenen Code (`/home/agent/sentinel/sentinel/*.py`).
+Gemessen am 2026-11-13 in Wegwerf-VMs:
+- **Unit-Tests:** 115/115, auf Fake-Dateisystemen und mit gefälschten `systemctl`/`journalctl`-Ausgaben.
+- **`sentinel-e2e`:** **14/14**, mehrfach, in jeweils rund 2 Minuten.
+- **Dashboard rot nach Manipulation:** 4,0–4,1 s. Das Ziel war ≤ 15 s.
+- **Baseline:** rund 2940 Einträge in etwa 4–8 s, `check` in etwa 2,5 s.
 
-## systemd
-- `sentinel-boot.service`: Selbstcheck einmal nach jedem Boot.
-- `sentinel.timer` → `sentinel.service`: alle 15 Minuten.
-- `sentinel-watch.service`: Dauerbetrieb (inotify + Live-Checks alle 15 s).
-- Beide laufen nur, wenn eine Baseline existiert. Befunde (exit 10/11) gelten als Ergebnis, nur exit 2 macht die Unit „failed“.
-- Installieren: `sudo sh systemd/install.sh`, danach `sudo sentinel baseline && sudo systemctl start sentinel-watch` (die Units liegen in `/etc` und gehören selbst zum Soll-Zustand).
+Zwei Dinge hat Sentinel auf dem echten System gefunden:
+- **Einen echten Boot-Fehler.** `systemd-vconsole-setup` scheiterte in 4 von 7 Boots, weil er sich mit der Autologin-getty um tty1 stritt. Behoben im System per Drop-in, danach 0 von 8.
+- **Einen Testfehler im eigenen Katalog.** „resolved stoppen“ ist unter systemd 261 gar kein DNS-Ausfall, weil die Socket-Aktivierung den Dienst sofort neu startet. F5 wurde deshalb umgebaut.
 
-## Exit-Codes
-| Code | Bedeutung |
-|---|---|
-| 0  | alles ok |
-| 10 | Warnung (mindestens ein Befund WARN) |
-| 11 | kritisch (mindestens ein Befund CRIT) |
-| 2  | Sentinel konnte nicht prüfen |
+## Vertrauensmodell (ehrlich)
+- Sentinel in der VM erkennt **unerwartete Änderungen**. Es schützt nicht vor einem Angreifer, der root ist: Der kann die Baseline neu schreiben (F9).
+- Dagegen hilft der Host. `pin` speichert den Stand außerhalb der VM und rechnet den Digest selbst nach. `verify` vergleicht den aktuellen Stand dagegen. `offline` prüft die ausgeschaltete Platte read-only mit dem **Code des Hosts**, und der hängt nicht von der VM ab.
+- Grenze: Der Host-Code kommt einmal aus einem Bundle aus der VM („trust on first use“). Ein Angreifer mit Zugriff auf den Host ist nicht abgedeckt.
+- Nächste Stufe: den Kernel mit **fs-verity/IMA** bauen. Beides ist im aktuellen Kernel aus, geprüft in `/boot/config-7.1.8`.
+- Vergleichbar mit AIDE, Tripwire und IMA. Das Eigene an Sentinel: selbst gebautes System, Boot-Selbstcheck, Live-Dashboard, externer Anker und ein reproduzierbares Fehler-Testlabor.
 
 ## Tests
 ```
-python3 -m unittest discover -s tests -t . -v      # Unit, Fake-System
-sudo sentinel-selftest                              # Integration, echtes System: nur in einer Wegwerf-VM
+python3 -m unittest discover -s tests -t .     # Unit (VM: Python 3.14, Host: 3.13)
+sudo sentinel-selftest                          # Integration auf dem echten System: nur in einer Wegwerf-VM
+sentinel-e2e                                    # Host: Wegwerf-Kopie der Platte, Demo + F1–F9, Tabelle
 ```
+
+## Aufbau des Repos
+`sentinel/` Paket (Checks, Store, CLI, TUI, Watch, inotify, Host-Seite) · `tests/` Unit-Tests · `systemd/` Units und Installer ·
+`host/` Host-Werkzeuge · `bin/` Wrapper · `tools/` TUI-Rauchtest und Demo-Recorder.
+
+Lizenz: noch nicht festgelegt (Entscheidung des Autors).
