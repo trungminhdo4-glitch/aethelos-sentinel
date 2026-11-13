@@ -1,8 +1,9 @@
 #!/bin/bash
 # Sentinel End-to-End-Test vom Host (WSL, als root). Bootet eine WEGWERF-KOPIE der LFS-Platte, nie das Original:
 #   1. Units + Baseline in der VM, Host pinnt den Stand ausserhalb der VM
-#   2. F1-F8 per sentinel-selftest (Erkennung in der VM)
-#   3. F9 Angreifer mit root: /usr/bin/ls aendern UND Baseline neu schreiben
+#   2. sentinel-watch + sentinel-demo (Stoppuhr: rot <= 15 s) + TUI-Rauchtest im Pseudo-Terminal
+#   3. F1-F8 per sentinel-selftest (Erkennung in der VM)
+#   4. F9 Angreifer mit root: /usr/bin/ls aendern UND Baseline neu schreiben
 #      -> VM selbst gruen (Grenze), Host-Vergleich (verify) und Offline-Pruefung der Platte erkennen es
 # Exit 0 = alles wie erwartet, 1 = mindestens eine Erwartung verfehlt, 2 = Lauf nicht moeglich.
 set -u
@@ -42,6 +43,15 @@ vm 'sudo sh ~/sentinel/systemd/install.sh >/dev/null && sudo sentinel baseline' 
 sentinel-host pin --trust "$TRUST" || die "pin fehlgeschlagen"
 sentinel-host verify --trust "$TRUST" >/dev/null; rc=$?
 [ $rc = 0 ] && row H0 "Host verify (sauber)" "OK" $rc PASS || row H0 "Host verify (sauber)" "-" $rc FAIL
+
+echo "=== M4: sentinel-watch + Demo mit Stoppuhr + Dashboard"
+vm 'sudo systemctl start sentinel-watch.service && sleep 4 && systemctl is-active sentinel-watch.service' >/dev/null   || die "sentinel-watch startet nicht"
+D=$(vm 'sudo sentinel-demo' 2>&1); rc=$?
+echo "$D"
+[ $rc = 0 ] && row D1 "Demo (Stoppuhr)" "-" $rc PASS || row D1 "Demo (Stoppuhr)" "-" $rc FAIL
+T=$(vm 'sudo python3 -I ~/sentinel/tools/tui_smoke.py' 2>&1); rc=$?
+echo "$T"
+[ $rc = 0 ] && row D2 "TUI im Pseudo-Terminal" "-" $rc PASS || row D2 "TUI im Pseudo-Terminal" "-" $rc FAIL
 
 echo "=== F1-F8: sentinel-selftest in der VM"
 J=$(vm 'sudo sentinel-selftest --json'); src=$?

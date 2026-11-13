@@ -1,0 +1,3 @@
+#!/bin/sh
+# Entwicklungs-Wrapper: Demo-Ablauf mit Stoppuhr (root, sentinel-watch muss laufen)
+exec python3 -c 'import sys; sys.path.insert(0, "/home/agent/sentinel"); from sentinel.demo import main; sys.exit(main(sys.argv[1:]))' "$@"

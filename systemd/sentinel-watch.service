@@ -1,0 +1,17 @@
+[Unit]
+Description=Sentinel Watch: inotify + Live-Checks (Aethelos)
+Documentation=file:///home/agent/sentinel/README.md
+After=multi-user.target
+ConditionPathExists=/var/lib/sentinel/sentinel.db
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sentinel watch
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=sentinel
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

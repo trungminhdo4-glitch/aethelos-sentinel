@@ -5,7 +5,7 @@ Entsteht und läuft komplett in der LFS-VM. Nur Python-3.14-Standardbibliothek, 
 
 Plan, Architektur und Meilensteine: siehe `SENTINEL-PLAN.md` im Host-Projekt (`Dev/sandbox/lfs/`).
 
-## Stand: M3 (v0.3.0)
+## Stand: M4 (v0.4.0)
 | Check | prüft | Befund |
 |---|---|---|
 | `integrity` | SHA-256, Rechte, Besitzer von `/usr/bin`, `/usr/sbin`, `/usr/lib/*.so*`, `*.ko*`, `/etc`, `/boot`; neue SUID-Dateien | CRIT/WARN |
@@ -21,6 +21,18 @@ Mit `--root /` (Standard) laufen alle Checks, mit einem anderen `--root` nur die
 Befehle (als root): `sentinel baseline | check | report [--json]`, `sentinel-fault list|inject|undo|status <F1..F8>`, `sentinel-selftest [F..]`.
 Jeder `check` schreibt eine Zusammenfassung ins Journal (`SYSLOG_IDENTIFIER=sentinel`, Felder `SENTINEL_EXIT`, `SENTINEL_CRIT`, `SENTINEL_WARN` ...):
 `journalctl -t sentinel` bzw. `journalctl SENTINEL_EXIT=11`.
+
+## Dashboard, Watch und Demo (M4)
+- `sudo sentinel tui`: curses-Dashboard mit einer Kachel je Check (grün/gelb/rot) und der Befundliste darunter, „seit“ zeigt das erste Auftreten. Es liest nur die Datenbank, `q` beendet. `--once` gibt den Inhalt als Text aus.
+- `sentinel-watch.service` (`sentinel watch`): inotify (per ctypes) auf alle Integritäts-Pfade, rund 1200 Verzeichnisse. Nach einer relevanten Änderung und 2 s Ruhe läuft ein voller Check, die Live-Checks alle 15 s.
+- `sudo sentinel-demo`: spielt die Demo mit Stoppuhr durch: `ls` manipulieren, rot, undo, grün, dann sshd stoppen. Exit 0, wenn alle Schritte in der Zeit sind.
+
+**Demo von Hand** (zwei Terminals, VM mit Baseline und laufendem `sentinel-watch`):
+1. Terminal 1, die VM-Konsole (`lfs-vm`, root-Autologin): `sentinel tui`
+2. Terminal 2 (WSL): `lfs-ssh -n 'sudo sentinel-fault inject F1'`. Die Kachel `integrity` wird nach etwa 4 s rot.
+3. `lfs-ssh -n 'sudo sentinel report'` zeigt Datei, alten und neuen SHA-256 und den Zeitpunkt. Danach `… sentinel-fault undo F1`, die Kachel wird grün.
+4. `… sentinel-fault inject F4` (sshd stoppen, die SSH-Sitzung bleibt offen). `services` wird gelb und zeigt „Stopped OpenSSH Daemon.“. Danach `undo F4`.
+5. Zum Schluss auf dem Host: `sentinel-e2e`, die Tabelle mit 14 Zeilen.
 
 ## Host als Vertrauensanker (M3)
 Wer in der VM root ist, kann eine Datei ändern **und** die Baseline neu schreiben. Dann ist `sentinel check` in der VM grün.
@@ -40,8 +52,9 @@ Sentinel überwacht außerdem seinen eigenen Code (`/home/agent/sentinel/sentine
 ## systemd
 - `sentinel-boot.service`: Selbstcheck einmal nach jedem Boot.
 - `sentinel.timer` → `sentinel.service`: alle 15 Minuten.
+- `sentinel-watch.service`: Dauerbetrieb (inotify + Live-Checks alle 15 s).
 - Beide laufen nur, wenn eine Baseline existiert. Befunde (exit 10/11) gelten als Ergebnis, nur exit 2 macht die Unit „failed“.
-- Installieren: `sudo sh systemd/install.sh`, danach `sudo sentinel baseline` (die Units liegen in `/etc` und gehören selbst zum Soll-Zustand).
+- Installieren: `sudo sh systemd/install.sh`, danach `sudo sentinel baseline && sudo systemctl start sentinel-watch` (die Units liegen in `/etc` und gehören selbst zum Soll-Zustand).
 
 ## Exit-Codes
 | Code | Bedeutung |

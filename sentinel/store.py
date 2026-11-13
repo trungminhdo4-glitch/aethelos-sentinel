@@ -42,6 +42,10 @@ class Store:
             os.makedirs(d, mode=0o700, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}
+        if "checks" not in cols:                 # Migration M4: welche Checks lief dieser Lauf (Komma-Liste)
+            with self.db:
+                self.db.execute("ALTER TABLE runs ADD COLUMN checks TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -85,13 +89,41 @@ class Store:
             else:
                 self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, value))
 
-    def record_run(self, findings: list[Finding], exit_code: int) -> int:
+    def _last_run_with(self, check: str):
+        for rid, checks in self.db.execute("SELECT id, checks FROM runs WHERE checks IS NOT NULL ORDER BY id DESC"):
+            if check in checks.split(","):
+                return rid
+        return None
+
+    def record_run(self, findings: list[Finding], exit_code: int, checks: list[str] | None = None) -> int:
+        # first_seen weitertragen, solange derselbe Befund im jeweils letzten Lauf dieses Checks schon da war
+        carried = []
+        for f in findings:
+            prev = self._last_run_with(f.check)
+            row = self.db.execute("SELECT first_seen FROM findings WHERE run_id=? AND check_name=? AND subject=?",
+                                  (prev, f.check, f.subject)).fetchone() if prev else None
+            carried.append(row[0] if row else f.first_seen)
         with self.db:
-            cur = self.db.execute("INSERT INTO runs(ts, exit) VALUES(?,?)", (_now(), exit_code))
+            cur = self.db.execute("INSERT INTO runs(ts, exit, checks) VALUES(?,?,?)",
+                                  (_now(), exit_code, ",".join(checks) if checks else None))
             rid = cur.lastrowid
             self.db.executemany("INSERT INTO findings VALUES(?,?,?,?,?,?)",
-                                [(rid, f.check, f.severity.name, f.subject, f.evidence, f.first_seen) for f in findings])
+                                [(rid, f.check, f.severity.name, f.subject, f.evidence, fs)
+                                 for f, fs in zip(findings, carried)])
         return rid
+
+    def latest_by_check(self) -> dict:
+        """Je Check der juengste Lauf, der ihn enthielt: {check: {run_id, ts, exit, findings[]}}."""
+        out: dict = {}
+        for rid, ts, ex, checks in self.db.execute(
+                "SELECT id, ts, exit, checks FROM runs WHERE checks IS NOT NULL ORDER BY id DESC LIMIT 500"):
+            for c in checks.split(","):
+                if c not in out:
+                    fs = [dict(zip(("check", "severity", "subject", "evidence", "first_seen"), r)) for r in self.db.execute(
+                        "SELECT check_name, severity, subject, evidence, first_seen FROM findings "
+                        "WHERE run_id=? AND check_name=? ORDER BY rowid", (rid, c))]
+                    out[c] = {"run_id": rid, "ts": ts, "exit": ex, "findings": fs}
+        return out
 
     def last_run(self):
         r = self.db.execute("SELECT id, ts, exit FROM runs ORDER BY id DESC LIMIT 1").fetchone()

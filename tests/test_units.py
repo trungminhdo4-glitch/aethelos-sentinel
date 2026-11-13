@@ -30,5 +30,26 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(t["OnUnitActiveSec"], "15min")
 
 
+    def test_watch_service(self):
+        u = unit("sentinel-watch.service")
+        self.assertEqual(u["Service"]["ExecStart"], "/usr/bin/sentinel watch")
+        self.assertEqual(u["Service"]["Restart"], "on-failure")
+        self.assertEqual(u["Service"]["SyslogIdentifier"], "sentinel")
+        self.assertEqual(u["Unit"]["ConditionPathExists"], "/var/lib/sentinel/sentinel.db")
+        self.assertEqual(u["Install"]["WantedBy"], "multi-user.target")
+
+
+class TestDemoWait(unittest.TestCase):
+    def test_wait_for(self):
+        from sentinel.demo import wait_for
+        t = [0.0]
+        vals = iter([None, None, "rot"])
+        ok, secs, v = wait_for(lambda: next(vals), 10, poll=0.5, clock=lambda: t[0],
+                               sleep=lambda s: t.__setitem__(0, t[0] + s))
+        self.assertEqual((ok, secs, v), (True, 1.0, "rot"))
+        ok, secs, v = wait_for(lambda: None, 2, poll=0.5, clock=lambda: t[0], sleep=lambda s: t.__setitem__(0, t[0] + s))
+        self.assertEqual((ok, v), (False, None))
+
+
 if __name__ == "__main__":
     unittest.main()

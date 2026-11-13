@@ -12,7 +12,7 @@ from sentinel.scan import scan, suid_scan
 from sentinel.store import Store, dumps
 
 EXIT_INTERNAL = 2
-TODO = ("tui",)
+TODO = ()
 FILE_CHECKS = ("integrity", "accounts")
 ALL_CHECKS = FILE_CHECKS + ("services", "network", "logs", "resources", "boot")
 PRIORITY = {0: 6, 10: 5, 11: 4}     # info / notice / warning -- nie 'err', sonst meldet der logs-Check Sentinel selbst
@@ -23,11 +23,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"sentinel {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
     for c, h in (("baseline", "Soll-Zustand aufnehmen"), ("check", "gegen Baseline pruefen"),
-                 ("report", "letzten Lauf anzeigen"), ("tui", "Dashboard (M4)"), ("export", "Baseline als JSON fuer den Host (sentinel-host pin/verify)")):
+                 ("report", "letzten Lauf anzeigen"), ("tui", "Terminal-Dashboard (liest die Datenbank)"), ("watch", "Dauerbetrieb: inotify + Live-Checks"), ("export", "Baseline als JSON fuer den Host (sentinel-host pin/verify)")):
         s = sub.add_parser(c, help=h)
         s.add_argument("--root", default="/", help="Wurzel des zu pruefenden Systems (Tests)")
         s.add_argument("--db", default=config.DEFAULT_DB)
         s.add_argument("--json", action="store_true")
+        if c == "tui":
+            s.add_argument("--once", action="store_true", help="einmal als Text ausgeben (ohne curses)")
+            s.add_argument("--interval", type=float, default=2.0)
         s.add_argument("--checks", help=f"Komma-Liste aus {','.join(ALL_CHECKS)} "
                                         "(Default: alle bei --root /, sonst nur integrity,accounts)")
     return p
@@ -119,7 +122,7 @@ def cmd_check(a) -> int:
     except (sysprobe.ProbeError, OSError) as e:
         return fail(str(e))
     rc = exit_code(findings)
-    st.record_run(findings, rc)
+    st.record_run(findings, rc, names)
     if "logs" in names:
         st.set_meta("logs_cursor", a._new_cursor)
     if os.path.realpath(a.root) == "/":     # nur das echte System meldet ans Journal (Tests mit --root nicht)
@@ -151,6 +154,16 @@ def cmd_export(a) -> int:
     return 0
 
 
+def cmd_tui(a) -> int:
+    from sentinel import tui
+    return tui.main(a.db, once=a.once, interval=a.interval)
+
+
+def cmd_watch(a) -> int:
+    from sentinel import watch
+    return watch.main(a.root, a.db)
+
+
 def cmd_report(a) -> int:
     run, fs = Store(a.db).last_run()
     if run is None:
@@ -174,4 +187,5 @@ def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     if a.command in TODO:
         return fail(f"{a.command}: noch nicht implementiert (Meilenstein M4)")
-    return {"baseline": cmd_baseline, "check": cmd_check, "report": cmd_report, "export": cmd_export}[a.command](a)
+    return {"baseline": cmd_baseline, "check": cmd_check, "report": cmd_report, "export": cmd_export,
+            "tui": cmd_tui, "watch": cmd_watch}[a.command](a)

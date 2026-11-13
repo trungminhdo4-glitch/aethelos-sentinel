@@ -19,12 +19,12 @@ class TestCli(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
         self.assertEqual(out.getvalue().strip(), f"sentinel {__version__}")
 
-    def test_unimplemented_command_is_fail_closed(self):
+    def test_tui_without_database_is_fail_closed(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            rc = main(["tui"])
+            rc = main(["tui", "--once", "--db", "/nonexistent/sentinel.db"])
         self.assertEqual(rc, 2)              # nie "gruen" ohne echte Pruefung
-        self.assertIn("nicht implementiert", err.getvalue())
+        self.assertIn("Datenbank", err.getvalue())
 
     def test_no_command_shows_usage(self):
         err = io.StringIO()
