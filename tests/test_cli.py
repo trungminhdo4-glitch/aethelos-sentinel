@@ -19,10 +19,10 @@ class TestCli(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
         self.assertEqual(out.getvalue().strip(), f"sentinel {__version__}")
 
-    def test_check_not_implemented_is_fail_closed(self):
+    def test_unimplemented_command_is_fail_closed(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            rc = main(["check"])
+            rc = main(["tui"])
         self.assertEqual(rc, 2)              # nie "gruen" ohne echte Pruefung
         self.assertIn("nicht implementiert", err.getvalue())
 

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entwicklungs-Wrapper: Fehler-Injektion (nur Tests/Demo)
+exec python3 -c 'import sys; sys.path.insert(0, "/home/agent/sentinel"); from sentinel.faults import main; sys.exit(main(sys.argv[1:]))' "$@"
+

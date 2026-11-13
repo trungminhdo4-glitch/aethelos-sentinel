@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entwicklungs-Wrapper: Integrationstest auf dem echten System (root)
+exec python3 -c 'import sys; sys.path.insert(0, "/home/agent/sentinel"); from sentinel.selftest import main; sys.exit(main(sys.argv[1:]))' "$@"
+
