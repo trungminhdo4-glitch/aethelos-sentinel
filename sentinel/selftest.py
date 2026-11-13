@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 from sentinel import cli, faults
 
@@ -39,17 +40,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"sentinel-selftest: System schon vor dem Test nicht sauber (exit {rc})", file=sys.stderr)
             return 2
         rows, ok_all = [], True
-        for fid, spec in faults.FAULTS.items():
-            subject = "/" + faults.resolve_target(fid)
-            expect = "f3evil" if fid == "F3" else subject
+        only = [f.upper() for f in argv] if argv else list(faults.FAULTS)
+        bad = [f for f in only if f not in faults.FAULTS]
+        if bad:
+            print(f"sentinel-selftest: unbekannt: {bad}", file=sys.stderr)
+            return 2
+        for fid in only:
+            spec = faults.FAULTS[fid]
+            chk, expect, want_rc = faults.expected(fid)
             try:
                 faults.inject(fid)
                 rc, data = _run("check", "--db", db, "--json")
             finally:
                 faults.undo(fid)
-            rc_after, _ = _run("check", "--db", db, "--json")
-            hits = [f for f in data.get("findings", []) if f["subject"] == expect]
-            ok = rc == 11 and bool(hits) and rc_after == 0
+            for _ in range(5):               # Live-Fehler (Dienst-Neustart, DNS) brauchen kurz, bis alles wieder steht
+                rc_after, _ = _run("check", "--db", db, "--json")
+                if rc_after == 0:
+                    break
+                time.sleep(3)
+            hits = [f for f in data.get("findings", []) if f["subject"] == expect and f["check"] == chk]
+            ok = rc == want_rc and bool(hits) and rc_after == 0
             ok_all &= ok
             rows.append((fid, spec["desc"], rc, hits[0]["severity"] if hits else "-", rc_after, "PASS" if ok else "FAIL"))
     print(f"{'ID':<4} {'erkannt':<8} {'exit':<5} {'danach':<7} {'':<5} Fehler")
@@ -58,4 +68,3 @@ def main(argv: list[str] | None = None) -> int:
     passed = sum(r[-1] == "PASS" for r in rows)
     print(f"-- {passed}/{len(rows)} erkannt und sauber zurueckgesetzt")
     return 0 if ok_all else 1
-

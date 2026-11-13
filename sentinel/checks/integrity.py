@@ -54,4 +54,3 @@ def check(base: dict[str, Entry], base_suid: set[str],
         if rel not in cur and rel not in base:
             add(Severity.CRIT, rel, "neue Datei mit SUID/SGID ausserhalb der Baseline-Pfade")
     return out
-

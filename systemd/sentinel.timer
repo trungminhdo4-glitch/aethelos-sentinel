@@ -1,0 +1,11 @@
+[Unit]
+Description=Sentinel alle 15 Minuten (Aethelos)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30s
+Unit=sentinel.service
+
+[Install]
+WantedBy=timers.target

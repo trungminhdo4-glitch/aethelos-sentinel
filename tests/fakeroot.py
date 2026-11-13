@@ -32,4 +32,3 @@ def write(root: str, rel: str, data: bytes, mode: int = 0o755) -> str:
         f.write(data)
     os.chmod(p, mode)
     return p
-

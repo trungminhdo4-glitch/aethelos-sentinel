@@ -1,0 +1,19 @@
+[Unit]
+Description=Sentinel Boot-Selbstcheck (Aethelos)
+Documentation=file:///home/agent/sentinel/README.md
+After=multi-user.target network-online.target
+Wants=network-online.target
+# Ohne Baseline gibt es nichts zu pruefen (sauber uebersprungen statt "failed")
+ConditionPathExists=/var/lib/sentinel/sentinel.db
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sentinel check
+# 10/11 = Befunde: das ist ein Ergebnis, kein Absturz. Nur exit 2 (Sentinel kaputt) macht die Unit "failed".
+SuccessExitStatus=10 11
+SyslogIdentifier=sentinel
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

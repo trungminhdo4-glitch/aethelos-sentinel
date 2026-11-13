@@ -28,4 +28,3 @@ class Finding:
 def exit_code(findings: list[Finding]) -> int:
     """Hoechste Severity bestimmt den Exit-Code; keine Befunde = 0."""
     return max((int(f.severity) for f in findings), default=int(Severity.OK))
-

@@ -31,6 +31,10 @@ def _sha256(path: str) -> str:
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
+        try:   # Page-Cache wieder freigeben: der Scan liest ~2,4 GB und soll den Cache des Systems nicht verdraengen
+            os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        except (AttributeError, OSError):
+            pass
     return h.hexdigest()
 
 
@@ -97,4 +101,3 @@ def suid_scan(root: str, skip=config.SUID_SKIP) -> set[str]:
             if stat.S_ISREG(st.st_mode) and st.st_mode & (stat.S_ISUID | stat.S_ISGID):
                 found.add(os.path.relpath(p, root))
     return found
-

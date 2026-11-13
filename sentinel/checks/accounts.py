@@ -22,4 +22,3 @@ def check(root: str) -> list[Finding]:
         if len(row) >= 2 and row[1] == "":
             out.append(Finding(CHECK, Severity.CRIT, row[0], "leeres Passwortfeld in /etc/shadow (Login ohne Passwort)"))
     return out
-

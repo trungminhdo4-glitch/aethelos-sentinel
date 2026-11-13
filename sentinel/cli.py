@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
-from sentinel import __version__, config
-from sentinel.checks import accounts, integrity
+from sentinel import __version__, config, journal, sysprobe
+from sentinel.checks import accounts, boot, integrity, logs, network, resources, services
 from sentinel.model import exit_code
 from sentinel.scan import scan, suid_scan
 from sentinel.store import Store, dumps
 
 EXIT_INTERNAL = 2
 TODO = ("tui", "export")
+FILE_CHECKS = ("integrity", "accounts")
+ALL_CHECKS = FILE_CHECKS + ("services", "network", "logs", "resources", "boot")
+PRIORITY = {0: 6, 10: 5, 11: 4}     # info / notice / warning -- nie 'err', sonst meldet der logs-Check Sentinel selbst
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,7 +28,24 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--root", default="/", help="Wurzel des zu pruefenden Systems (Tests)")
         s.add_argument("--db", default=config.DEFAULT_DB)
         s.add_argument("--json", action="store_true")
+        s.add_argument("--checks", help=f"Komma-Liste aus {','.join(ALL_CHECKS)} "
+                                        "(Default: alle bei --root /, sonst nur integrity,accounts)")
     return p
+
+
+def default_checks(root: str) -> list[str]:
+    """Live-Checks (systemctl, journal, Netz ...) gelten nur fuer das laufende System, nie fuer ein fremdes --root."""
+    return list(ALL_CHECKS) if os.path.realpath(root) == "/" else list(FILE_CHECKS)
+
+
+def selected(a) -> list[str]:
+    if not a.checks:
+        return default_checks(a.root)
+    names = [c.strip() for c in a.checks.split(",") if c.strip()]
+    bad = [c for c in names if c not in ALL_CHECKS]
+    if bad:
+        raise ValueError(f"unbekannte Checks: {', '.join(bad)} (bekannt: {', '.join(ALL_CHECKS)})")
+    return names
 
 
 def fail(msg: str) -> int:
@@ -32,16 +53,58 @@ def fail(msg: str) -> int:
     return EXIT_INTERNAL
 
 
+def _run(cmd, timeout=10):
+    return sysprobe.run(cmd, timeout)        # zur Laufzeit nachschlagen (Tests ersetzen sysprobe.run)
+
+
 def cmd_baseline(a) -> int:
-    res = scan(a.root)
-    if res.errors:
-        return fail("Baseline abgebrochen, nicht lesbar:\n  " + "\n  ".join(res.errors[:20]))
-    digest = Store(a.db).save_baseline(res.entries, suid_scan(a.root))
+    try:
+        names = selected(a)
+        res = scan(a.root)
+        if res.errors:
+            return fail("Baseline abgebrochen, nicht lesbar:\n  " + "\n  ".join(res.errors[:20]))
+        cursor = logs.current_cursor(_run) if "logs" in names else None
+    except (ValueError, sysprobe.ProbeError) as e:
+        return fail(str(e))
+    st = Store(a.db)
+    digest = st.save_baseline(res.entries, suid_scan(a.root))
+    st.set_meta("logs_cursor", cursor)
     print(f"Baseline gespeichert: {len(res.entries)} Eintraege, digest {digest[:16]}…")
     return 0
 
 
+def run_checks(names: list[str], a, st: Store, base, base_suid) -> list:
+    findings = []
+    if "integrity" in names:
+        res = scan(a.root)
+        if res.errors:
+            raise sysprobe.ProbeError("Pruefung unvollstaendig, nicht lesbar:\n  " + "\n  ".join(res.errors[:20]))
+        findings += integrity.check(base, base_suid, res.entries, suid_scan(a.root))
+    if "accounts" in names:
+        try:
+            findings += accounts.check(a.root)
+        except OSError as e:
+            raise sysprobe.ProbeError(f"Konten-Pruefung nicht moeglich: {e}") from None
+    if "services" in names:
+        findings += services.check(_run)
+    if "network" in names:
+        findings += network.check()
+    if "logs" in names:
+        fs, cursor = logs.check(_run, st.get_meta("logs_cursor"))
+        findings += fs
+        a._new_cursor = cursor
+    if "resources" in names:
+        findings += resources.check()
+    if "boot" in names:
+        findings += boot.check(_run)
+    return findings
+
+
 def cmd_check(a) -> int:
+    try:
+        names = selected(a)
+    except ValueError as e:
+        return fail(str(e))
     st = Store(a.db)
     try:
         b = st.load_baseline()
@@ -50,20 +113,30 @@ def cmd_check(a) -> int:
     if b is None:
         return fail(f"keine Baseline in {a.db} (zuerst: sudo sentinel baseline)")
     base, base_suid, _ = b
-    res = scan(a.root)
-    if res.errors:
-        return fail("Pruefung unvollstaendig, nicht lesbar:\n  " + "\n  ".join(res.errors[:20]))
+    a._new_cursor = None
     try:
-        findings = integrity.check(base, base_suid, res.entries, suid_scan(a.root)) + accounts.check(a.root)
-    except OSError as e:
-        return fail(f"Konten-Pruefung nicht moeglich: {e}")
+        findings = run_checks(names, a, st, base, base_suid)
+    except (sysprobe.ProbeError, OSError) as e:
+        return fail(str(e))
     rc = exit_code(findings)
     st.record_run(findings, rc)
+    if "logs" in names:
+        st.set_meta("logs_cursor", a._new_cursor)
+    if os.path.realpath(a.root) == "/":     # nur das echte System meldet ans Journal (Tests mit --root nicht)
+        _journal(findings, rc, names)
     if a.json:
-        print(dumps({"exit": rc, "findings": [f.to_dict() for f in findings]}))
+        print(dumps({"exit": rc, "checks": names, "findings": [f.to_dict() for f in findings]}))
     else:
         _print_table([f.to_dict() for f in findings], rc)
     return rc
+
+
+def _journal(findings, rc, names) -> None:
+    journal.send({"MESSAGE": f"sentinel check: {len(findings)} Befund(e), exit {rc}", "PRIORITY": PRIORITY.get(rc, 4),
+                  "SENTINEL_EXIT": rc, "SENTINEL_FINDINGS": len(findings),
+                  "SENTINEL_CRIT": sum(f.severity.name == "CRIT" for f in findings),
+                  "SENTINEL_WARN": sum(f.severity.name == "WARN" for f in findings),
+                  "SENTINEL_CHECKS": ",".join(names)})
 
 
 def cmd_report(a) -> int:
@@ -90,4 +163,3 @@ def main(argv: list[str] | None = None) -> int:
     if a.command in TODO:
         return fail(f"{a.command}: noch nicht implementiert (Meilenstein M3/M4)")
     return {"baseline": cmd_baseline, "check": cmd_check, "report": cmd_report}[a.command](a)
-

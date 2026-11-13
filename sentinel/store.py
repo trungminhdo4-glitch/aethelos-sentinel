@@ -43,6 +43,14 @@ class Store:
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
 
+    def close(self) -> None:
+        self.db.close()
+
+    def __del__(self):
+        db = getattr(self, "db", None)
+        if db is not None:
+            db.close()
+
     def save_baseline(self, entries: dict[str, Entry], suid: set[str]) -> str:
         digest = baseline_digest(entries, suid)
         with self.db:
@@ -66,6 +74,17 @@ class Store:
             raise ValueError("Baseline in der Datenbank passt nicht zu ihrem Digest (manipuliert/beschaedigt)")
         return entries, suid, meta
 
+    def get_meta(self, key: str) -> str | None:
+        r = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r[0] if r else None
+
+    def set_meta(self, key: str, value: str | None) -> None:
+        with self.db:
+            if value is None:
+                self.db.execute("DELETE FROM meta WHERE key=?", (key,))
+            else:
+                self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, value))
+
     def record_run(self, findings: list[Finding], exit_code: int) -> int:
         with self.db:
             cur = self.db.execute("INSERT INTO runs(ts, exit) VALUES(?,?)", (_now(), exit_code))
@@ -85,4 +104,3 @@ class Store:
 
 def dumps(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
-

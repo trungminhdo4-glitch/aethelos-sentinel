@@ -27,3 +27,13 @@ SUID_SKIP = {"proc", "sys", "dev", "run"}
 
 DEFAULT_DB = "/var/lib/sentinel/sentinel.db"
 
+# --- M2: Live-Checks ---
+# Pflicht-Dienste (nicht aktiv = Warnung)
+REQUIRED_UNITS = ("sshd.service", "systemd-networkd.service", "systemd-resolved.service", "systemd-journald.service")
+DNS_NAME = "linuxfromscratch.org"
+HTTPS_URL = None              # Owner-Entscheidung offen: z.B. "https://www.linuxfromscratch.org/" (braucht Internet)
+DISK_PATHS = ("/",)
+DISK_WARN_PCT = 90
+MEM_MIN_AVAIL_PCT = 10
+LOAD_PER_CPU = 2.0
+BOOT_MAX_S = 60
