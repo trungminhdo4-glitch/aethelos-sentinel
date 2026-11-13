@@ -112,4 +112,4 @@ sentinel-e2e                                    # Host: Wegwerf-Kopie der Platte
 `sentinel/` Paket (Checks, Store, CLI, TUI, Watch, inotify, Host-Seite) · `tests/` Unit-Tests · `systemd/` Units und Installer ·
 `host/` Host-Werkzeuge · `bin/` Wrapper · `tools/` TUI-Rauchtest und Demo-Recorder.
 
-Lizenz: noch nicht festgelegt (Entscheidung des Autors).
+Lizenz: MIT, siehe [LICENSE](LICENSE).
