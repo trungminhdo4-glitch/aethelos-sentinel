@@ -1,0 +1,4 @@
+# Shell-Skripte, Units und Python immer mit LF (auch bei Windows-Klonen mit core.autocrlf)
+* text=auto eol=lf
+*.json -diff linguist-generated
+docs/recordings/*.json linguist-generated
