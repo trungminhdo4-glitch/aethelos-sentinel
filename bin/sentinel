@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entwicklungs-Wrapper: startet Sentinel direkt aus dem Repo (/home/agent/sentinel)
+exec python3 -c 'import sys; sys.path.insert(0, "/home/agent/sentinel"); from sentinel.cli import main; sys.exit(main(sys.argv[1:]))' "$@"
+
