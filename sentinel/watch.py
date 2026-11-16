@@ -75,19 +75,16 @@ class TargetWatcher:
         return any((rel + "/").startswith(top + "/") and fnmatch.fnmatch(name, pat) for top, pat in self.targets)
 
     def relevant(self, timeout: float) -> list[str]:
-        """Relevante Pfade (relativ zu root); sammelt bis 0,2 s Ruhe nach dem ersten Ereignis."""
-        out: list[str] = []
-        evs = self.ino.read(timeout)
-        while evs:
-            for path, _mask in evs:
-                if path == OVERFLOW:
-                    out.append(OVERFLOW)
-                    continue
-                rel = os.path.relpath(path, self.root)
-                if self.is_relevant(rel) and rel not in out:
-                    out.append(rel)
-            evs = self.ino.read(0.2)
-        return out
+        """Relevante Pfade aus einem inotify-Lesevorgang; der Scheduler verwaltet die Ruhepause."""
+        out: dict[str, None] = {}
+        for path, _mask in self.ino.read(timeout):
+            if path == OVERFLOW:
+                out[OVERFLOW] = None
+                continue
+            rel = os.path.relpath(path, self.root)
+            if self.is_relevant(rel):
+                out[rel] = None
+        return list(out)
 
 
 def _check(root: str, db: str, kind: str) -> int:
