@@ -109,7 +109,9 @@ def main(root: str, db: str, interval: float = INTERVAL, debounce: float = DEBOU
     with TargetWatcher(root) as w:
         print(f"sentinel watch: {w.count} Verzeichnisse beobachtet, Live-Checks alle {interval:.0f} s", flush=True)
         sched = Scheduler(debounce, interval, now=time.monotonic())
-        _check(root, db, "full")
+        if _check(root, db, "full") == 2:
+            print("sentinel watch: initialer Check fehlgeschlagen (exit 2)", file=sys.stderr, flush=True)
+            return 2
         sched.ran("full", time.monotonic())
         while not stop:
             changed = w.relevant(sched.timeout(time.monotonic()))

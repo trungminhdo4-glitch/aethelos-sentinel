@@ -21,3 +21,21 @@ class TestTargetWatcher(unittest.TestCase):
                 self.assertEqual(watcher.relevant(0.5), ["usr/bin/ls", watch.OVERFLOW])
                 read.assert_called_once_with(0.5)
                 self.assertEqual(watcher.relevant(0), ["usr/bin/cat"])
+
+
+class TestWatchStartup(unittest.TestCase):
+    def test_initial_probe_error_exits_before_waiting(self):
+        with (
+            patch.object(watch.os.path, "exists", return_value=True),
+            patch.object(watch.signal, "signal"),
+            patch.object(watch, "TargetWatcher") as watcher,
+            patch.object(watch, "_check", return_value=2) as check,
+        ):
+            active = watcher.return_value.__enter__.return_value
+            active.count = 0
+            active.relevant.side_effect = AssertionError("watch waited after failed startup")
+            self.assertEqual(watch.main("/", "sentinel.db"), 2)
+
+        check.assert_called_once_with("/", "sentinel.db", "full")
+        active.relevant.assert_not_called()
+        watcher.return_value.__exit__.assert_called_once()
