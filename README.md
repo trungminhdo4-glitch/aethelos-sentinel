@@ -14,6 +14,23 @@ Was es kann:
 
 ## Architektur
 
+### Watch recovery
+
+After a startup probe error (exit 2), the watcher exits so the service manager
+can report the failure. During operation, a failed full check remains pending
+and retries after the configured interval (15 seconds by default), even without
+another filesystem event. New events do not keep postponing that retry. Regular
+live checks retain their own deadline; a failed full check does not count as a
+completed live check. Failed live attempts wait one interval before trying again.
+Completed checks with findings do not trigger an error retry.
+
+The retry scheduler is covered by synthetic unit tests without launching Linux
+inotify, root probes, or a VM:
+
+```bash
+python -m unittest tests.test_watch_retry tests.test_watch_read.TestWatchStartup
+```
+
 ```mermaid
 flowchart LR
   subgraph VM["LFS-VM (Aethelos)"]
