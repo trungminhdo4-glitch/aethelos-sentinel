@@ -27,12 +27,19 @@ class Scheduler:
         self.debounce, self.interval = debounce, interval
         self.last_event = None
         self.last_live = now
+        self.retry_full_at = None
 
     def event(self, now: float) -> None:
         self.last_event = now
 
     def due(self, now: float):
-        if self.last_event is not None and now - self.last_event >= self.debounce:
+        if self.retry_full_at is not None:
+            # A failed integrity check must not postpone the live-check clock.
+            if now - self.last_live >= self.interval:
+                return "live"
+            if now >= self.retry_full_at:
+                return "full"
+        elif self.last_event is not None and now - self.last_event >= self.debounce:
             return "full"
         if now - self.last_live >= self.interval:
             return "live"
@@ -41,11 +48,21 @@ class Scheduler:
     def ran(self, kind: str, now: float) -> None:
         if kind == "full":
             self.last_event = None
+            self.retry_full_at = None
         self.last_live = now                  # ein voller Lauf enthaelt die Live-Checks
+
+    def failed(self, kind: str, now: float) -> None:
+        """Throttle retries without treating a failed full check as completed."""
+        if kind == "full":
+            self.retry_full_at = now + self.interval
+        else:
+            self.last_live = now              # retry live checks at their normal interval
 
     def timeout(self, now: float) -> float:
         t = self.last_live + self.interval - now
-        if self.last_event is not None:
+        if self.retry_full_at is not None:
+            t = min(t, self.retry_full_at - now)
+        elif self.last_event is not None:
             t = min(t, self.last_event + self.debounce - now)
         return max(0.0, t)
 
@@ -123,5 +140,7 @@ def main(root: str, db: str, interval: float = INTERVAL, debounce: float = DEBOU
             if kind:
                 if _check(root, db, kind) == 2:
                     print("sentinel watch: Check fehlgeschlagen (exit 2)", file=sys.stderr, flush=True)
-                sched.ran(kind, time.monotonic())
+                    sched.failed(kind, time.monotonic())
+                else:
+                    sched.ran(kind, time.monotonic())
     return 0
